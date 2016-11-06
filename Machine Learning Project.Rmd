@@ -1,0 +1,201 @@
+---
+title: "Predicting the Quality of Exercise Routines"
+author: "Anthony Cerna"
+date: "November 5th, 2016"
+output: html_document
+subtitle: 'John Hopkins University: Practical Machine Learning (Project)'
+---
+
+***
+
+## I. Overview
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are "tech geeks". One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, the goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: <http://groupware.les.inf.puc-rio.br/har> (see the section on the Weight Lifting Exercise Dataset). 
+
+The goal of this report is to build two predictive classification models using two very well known supervised learning algorithms: **Quadratic Discriminant Analysis** and **Random Forest**. These models will be able to read in new accelerometer data and predict a response label that notifies the user of the quality of their exercise method.
+
+
+***
+
+
+## II. Data Description & Importation
+
+### i. Data Source
+For this assignment, we are provided two data sets. The first is titled the training data set because it contains the true classification response labels. I refer to this one as `labeled.dat` in the my code and it can be downloaded at: 
+* <https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv>.
+
+The second provided data set is called the test data, which contains 20 new observations that DO NOT have the true classification response label. I refer to this one as `new.dat` in my code and it can be downloaded here: 
+* <https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv>.
+
+This collected data is part of the **Human Activity Recognition** project. The full source is: ( Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. **Qualitative Activity Recognition of Weight Lifting Exercises**. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.)
+
+The following is a short description of the data that is provided in the author's website:
+"Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes. Participants were supervised by an experienced weight lifter to make sure the execution complied to the manner they were supposed to simulate. The exercises were performed by six male participants aged between 20-28 years, with little weight lifting experience. We made sure that all participants could easily simulate the mistakes in a safe and controlled manner by using a relatively light dumbbell (1.25kg).
+
+Read more: <http://groupware.les.inf.puc-rio.br/har#dataset#ixzz4PD8xRpmD> "
+
+
+```{r}
+labeled.dat <- read.csv("pml-training.csv", row.names = 1)
+new.dat <- read.csv("pml-testing.csv", row.names = 1)
+
+dim(labeled.dat)
+dim(new.dat)
+```
+
+### ii. Variables
+
+As mentioned above, the `labeled.dat` data set contains the true response variable for each observation. This can be found in the **classe** column that species how the exercise was performed:
+
+* Class A: exactly according to the specification 
+* Class B: throwing the elbows to the front 
+* Class C: lifting the dumbbell only halfway
+* Class D: lowering the dumbbell only halfway
+* Class E: throwing the hips to the front
+
+The `new.dat` set, on the other hand, does not contain the true **classe** label. This column is replaced by a **problem_id** variable that is simply the index number of the observation (ranges from 1 to 20). There are a total of 20 new observations that will get assigned a predicted **classe** label by the predictive model in the latter portion of this report.
+
+
+### iii. Partitioning the Labeled Data
+The `labeled.dat` data set is split into two parts: training set (70%) and testing set (30%). The 'training' data set will be used to build/train the predictive model and 'testing' data set will be used to check the accuracy of the model. We need to create a testing set that contains the true response variable so that the accuracy of the predictive model can be verified.
+
+```{r}
+suppressMessages(library(caret))
+set.seed(1000)
+
+inTrain <- createDataPartition(y=labeled.dat$classe, p=0.7, list=FALSE)
+training <- labeled.dat[inTrain,]
+testing <-  labeled.dat[-inTrain,]
+
+dim(training)
+dim(testing)
+```
+
+***
+
+## III. Data Cleaning 
+The data sets contain a very large number of columns (159)! We need to compress our data and get rid of columns that do not provide valuable information. 
+
+### i. Removing Identification Variables
+The first four columns of the data set should be removed because these are identification labels that does not provide useful information to the model. For example, the **user_name** will not be helpful because we want a predictive model that can be applied to potential new users. The raw time stamps will also not be of any use because any new observations will have a new unique time stamp of when that data was recorded. Therefore, these columns are excluded.
+
+```{r}
+names(labeled.dat)[1:4]
+training <- training[,-c(1:4)]
+testing <- testing[,-c(1:4)]
+
+ncol(training) #number of columns decreased by 4
+```
+
+### ii. Identification of Near Zero Variance Predictors
+The next task is to remove the predictors that have only one unique value (i.e. zero variability in the column) or predictors that have very few unique values relative to the number of observations. The lack of variability within these types of variables means that it they do not provide a predictive model with relavent information on how to distinguish the observations that belong to different **classe** labels. The `nearZeroVar()` function from the `caret package` does just that.
+
+```{r}
+nzv <- nearZeroVar(training[,-ncol(training)]) #do not want to remove the classe column
+training <- training[,-nzv] #remove near zero variance predictors 
+testing <- testing[,-nzv]
+ncol(training) #number of columns decreased by 54
+```
+
+### iii. Removing Columns with High NA Percentage
+It is important to note that the data still contains columns that have a huge number of NA values in them. This also does not provide relavent information for our predictive models. Any column that contains 95% or more NA's will also be discarded:
+
+```{r}
+na.var <- apply(training, 2, function(x) mean(is.na(x))) > 0.95
+
+training <- training[,na.var==FALSE] #make sure classe variable is included
+testing <- testing[,na.var==FALSE]
+
+ncol(training) #number of columns decreased by47
+```
+
+### iv. Checking for Independence of Variables
+Recall that high correlation amongst predictors can distort the accuracy of a predictive model. Multicollinearity between the variables make it difficult to determine which variables are doing a good job of explaining the variability within a response variable. A useful tool to check thisis a Correlation matrix:
+
+```{r}
+cor.Mat <- cor(training[,-ncol(training)]) #exclude response variable
+
+library(RColorBrewer)
+cols <- brewer.pal(n=8, name="PuOr")
+
+library(corrplot)
+corrplot(cor.Mat, method="color", type="lower", tl.col="black", tl.cex=.7, col=cols,
+         diag=FALSE, title ="Predictor's Correlation Matrix", mar=c(0,0,1,0))
+```
+
+The variables that are highly correlated with one another are shown in darker color shades. There are a few with pretty high correlation values. This can be dealt with using Principle Component Analysis. However, most of the variables are not highly correlated with one another. So PCA is excluded here.
+
+After cleaning up our data, we end up with a total of 54 variables (53 predictors + response variable) that will be used for the model building process.
+
+
+***
+
+## IV. Building Prediction Models: Random Forest
+
+### i. Model 1: Quadratic Discriminant Analysis (QDA)
+
+QDA is a very common tool used for classification when the response variable has more than 2 classes. QDA is similar to Linear Discriminant Analysis (LDA) in the sense that the QDA classifier results from assuming that the observations from each class are drawn from a multivariate Gaussian distribution with a class specific mean vector. It then   
+plugs in estimates for the parameters into Bayes' Theorem in order to perform predictions. 
+
+However, unlike LDA, QDA assumes that each class (where K=5 in this case) has its own covariance matrix. LDA is much a much less flexible classifier than QDA, meaning that in theory, it has substantially lower variance. However, Tibshirani et. al. recommends the usage of QDA "if the training set is very large, so that the variance of the classifier is not a major concern, or if the assumption of a common covariance matrix for the K classes is clearly untenable." (James, Gareth, Daniela Witten, Trevor Hastie, and Robert Tibshirani. *An Introduction to Statistical Learning: With Applications in R*. New York: Springer, 2013. Print.)
+
+Below, I create a QDA model with the training set and check the accuracy of the model
+
+```{r}
+set.seed(100)
+library(MASS)
+mod.qda <- qda(classe~., data=training)
+mod.qda$prior #prior probabilities of each class
+
+predictQDA.test <- predict(mod.qda, testing)$class
+confusionMatrix(predictQDA.test, testing$classe)
+```
+
+The QDA Classification model yields an overall accuracy rate of 89.12%. Looking at the confusion matrix, it appears that a lot of the missclassification occured in class C: it has a Positive Prediction Value of only 75%. 
+
+### ii. Model 2: Random Forest
+In this assignment, we are primarily interested in prediction, rather than inference. Random Forest is an excellent model because it has been shown that it has very high accuracy rate. Recall that Random Forest is similar to Bagging in the sense that we build a number of decision trees on bootstrapped training samples. However, when building these decision trees, each time a split in a tree is considered, *a random sample of m predictors* is chosen as split condidates from the full set of p predictors in our training data.
+
+It is important to use Cross-Validation to determine the optimal value for the parameter `mtry` (i.e. the m value mentioned above). Here we do a 4-fold Cross-Validation. 
+
+```{r}
+suppressMessages(library(randomForest))
+set.seed(100)
+control.rf <- trainControl(method="cv", number=4, verboseIter = FALSE)
+mod.rf <- train(classe~., data=training, method="rf", trControl=control.rf)
+mod.rf$finalModel
+```
+
+Our trained Random Forest model grew 500 decision trees on bootstrapped training samples. The optimal value for `mtry` that was returned from the 4-Fold CV was mtry=27. This final model gives an estimated OOB Error Rate of .26%!
+
+Let's use the created Random Forest model to predict on the "testing" data set and create a confusion matrix to compare the predictions to the actual labels: 
+
+```{r}
+#Prediction on test data to report Accuracy
+predictRF.test <- predict(mod.rf, newdata=testing)
+confusionMatrix(predictRF.test, testing$classe)
+```
+
+The accuracy on the "testing" data is **99%**! Random Forest substantially increases prediction accuracy when compared with other models, however it does this at the expense of interpretability. Fortunately, the `varImpPlot()` function plots the variables in order of decreasing importance in the model. It uses the Average Decrease in the Gini Index as its measure of importance: the larger the decrease in Gini Index, the more important the variable. 
+
+```{r}
+varImpPlot(mod.rf$finalModel, main="Random Forest: Variable Importance", pch=10, cex=.9, col="dark blue")
+```
+
+From the above plot, it is clear that **num_window**, **roll_belt**, and **pitch_forearm** are the most important variables in the model
+
+Random Forest might have likely performed better than QDA in terms of accuracy because it did not make any assumption on the distribution of the predictors.
+***
+
+## V. Predicting Quality of Exercise on New Data
+Lastly, we apply the final Random Forest model on 20 new observations (i.e. observations that do not have an actual label `classe`). The model predicts the following labels:
+
+```{r}
+predict(mod.qda, newdata=new.dat)$class
+predict(mod.rf, newdata = new.dat)
+```
+
+In conclusion, it would be best to choose the predicted labels that are outputted by the Random Forest model because the model had a much better prediction accuracy. However, in this case we see that both models predict out the exact same response variable. This concludes the model building process.
+
+***
